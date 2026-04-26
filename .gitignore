@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.pytest_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets & local data
+.env
+.env.*
+!.env.example
+
+# Personal config (PII inside) — keep local only.
+config.yaml
+config.yaml.bak
+
+# Personal documents — never publish.
+*.pdf
+*.docx
+resume*
+
+# Agent outputs
+jobs.db
+jobs.db-journal
+jobs.db-wal
+jobs.db-shm
+results/
+reports/
+logs/
+tailored_resumes/
+interview_prep/
+network/
+exports/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

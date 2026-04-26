@@ -1,0 +1,911 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Job Hunt AI Agent</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    darkMode: 'class',
+    theme: {
+      extend: {
+        colors: {
+          bg:    '#0f172a',
+          panel: '#1e293b',
+          panel2:'#111827',
+          border:'#334155',
+          muted: '#94a3b8',
+          accent:'#38bdf8',
+        },
+      },
+    },
+  }
+</script>
+<style>
+  body { background: #0f172a; color: #e2e8f0; }
+  .tab-btn.active { background: #0b2540; color: #93c5fd; border-bottom: 2px solid #38bdf8; }
+  .log { background: #0b1220; color: #cbd5e1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+         font-size: 12px; white-space: pre-wrap; }
+  table.jobs th { cursor: pointer; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px;
+          background: #334155; color: #cbd5e1; font-size: 11px; }
+  .score { display: inline-block; min-width: 36px; text-align: center; padding: 2px 8px;
+           border-radius: 999px; background: #0ea5e9; color: #fff; font-weight: 600; }
+  .score.mid { background: #d97706; }
+  .score.low { background: #475569; }
+  .toast { position: fixed; right: 16px; bottom: 16px; padding: 10px 14px; border-radius: 8px;
+           background: #1e293b; border: 1px solid #334155; color: #e2e8f0; font-size: 13px;
+           opacity: 0; transform: translateY(8px); transition: all .2s ease; z-index: 100; }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.error { border-color: #dc2626; }
+  .toast.ok    { border-color: #22c55e; }
+  details > summary { cursor: pointer; }
+  details > summary::marker { color: #64748b; }
+  .cfg-input { display: block; width: 100%; margin-top: 4px; padding: 6px 10px;
+               background: #0b1220; border: 1px solid #1f2a3b; border-radius: 6px;
+               color: #e2e8f0; font-size: 13px; outline: none; }
+  .cfg-input:focus { border-color: #38bdf8; }
+  textarea.cfg-input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .cfg-lbl { display: block; font-size: 11px; text-transform: uppercase;
+             letter-spacing: 0.05em; color: #64748b; }
+</style>
+</head>
+<body class="min-h-screen">
+<div class="max-w-7xl mx-auto p-6">
+  <header class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-2xl font-semibold">Job Hunt AI Agent</h1>
+      <p class="text-sm text-muted">Scrape, score, track, and hunt — from a single dashboard.</p>
+    </div>
+    <div class="flex items-center gap-2 text-xs text-muted">
+      <span id="connection-dot" class="inline-block w-2 h-2 rounded-full bg-green-400"></span>
+      <span id="connection-label">idle</span>
+    </div>
+  </header>
+
+  <!-- Stats cards -->
+  <section id="stats-cards" class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-5">
+    <div class="bg-panel border border-border rounded-lg p-4">
+      <div class="text-xs text-muted uppercase tracking-wide">Total jobs</div>
+      <div class="text-2xl font-semibold mt-1" id="stat-total">0</div>
+    </div>
+    <div class="bg-panel border border-border rounded-lg p-4">
+      <div class="text-xs text-muted uppercase tracking-wide">New last 24h</div>
+      <div class="text-2xl font-semibold mt-1" id="stat-new24">0</div>
+    </div>
+    <div class="bg-panel border border-border rounded-lg p-4">
+      <div class="text-xs text-muted uppercase tracking-wide">Applied</div>
+      <div class="text-2xl font-semibold mt-1" id="stat-applied">0</div>
+    </div>
+    <div class="bg-panel border border-border rounded-lg p-4">
+      <div class="text-xs text-muted uppercase tracking-wide">Interviews</div>
+      <div class="text-2xl font-semibold mt-1" id="stat-interviews">0</div>
+    </div>
+    <div class="bg-panel border border-border rounded-lg p-4"
+         title="Platforms that produced jobs in the DB / platforms currently enabled in config.yaml">
+      <div class="text-xs text-muted uppercase tracking-wide">Sources (DB / enabled)</div>
+      <div class="text-2xl font-semibold mt-1">
+        <span id="stat-platforms-db">0</span>
+        <span class="text-muted text-base">/ <span id="stat-platforms-enabled">0</span></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tabs -->
+  <nav class="flex gap-1 border-b border-border mb-4" id="tabs">
+    <button class="tab-btn active px-4 py-2 text-sm rounded-t-md" data-tab="run">Run</button>
+    <button class="tab-btn px-4 py-2 text-sm rounded-t-md" data-tab="jobs">Jobs</button>
+    <button class="tab-btn px-4 py-2 text-sm rounded-t-md" data-tab="kanban">Kanban</button>
+    <button class="tab-btn px-4 py-2 text-sm rounded-t-md" data-tab="config">Config</button>
+    <button class="tab-btn px-4 py-2 text-sm rounded-t-md" data-tab="runs">Runs</button>
+  </nav>
+
+  <!-- RUN -->
+  <section id="tab-run" class="tab-panel">
+    <div class="bg-panel border border-border rounded-lg p-5">
+      <h2 class="font-semibold mb-3">Run agent</h2>
+      <div class="grid md:grid-cols-2 gap-6">
+        <div>
+          <div class="text-xs text-muted uppercase mb-2">Platforms</div>
+          <div id="platform-list" class="grid grid-cols-2 gap-2"></div>
+        </div>
+        <div>
+          <div class="text-xs text-muted uppercase mb-2">Flags</div>
+          <label class="flex items-center gap-2 text-sm mb-2">
+            <input type="checkbox" id="flag-new-only" class="accent-accent"> --new-only
+          </label>
+          <label class="flex items-center gap-2 text-sm mb-2">
+            <input type="checkbox" id="flag-no-apply" class="accent-accent"> --no-apply
+          </label>
+          <label class="flex items-center gap-2 text-sm mb-2">
+            <input type="checkbox" id="flag-verbose" class="accent-accent"> --verbose
+          </label>
+        </div>
+      </div>
+      <div class="mt-4 flex gap-2">
+        <button id="btn-run" class="px-4 py-2 bg-accent text-slate-900 font-medium rounded-md hover:opacity-90">Run</button>
+        <button id="btn-stop" class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-500 disabled:opacity-40" disabled>Stop</button>
+        <span id="run-task-id" class="text-xs text-muted self-center"></span>
+      </div>
+    </div>
+    <div class="bg-panel border border-border rounded-lg p-0 mt-4 overflow-hidden">
+      <div class="flex items-center justify-between px-4 py-2 border-b border-border">
+        <span class="text-sm text-muted">Live log</span>
+        <div class="flex items-center gap-3 text-xs">
+          <span id="run-elapsed" class="text-muted"></span>
+          <span id="run-lines" class="text-muted"></span>
+          <button id="btn-clear-log" class="text-muted hover:text-white">clear</button>
+        </div>
+      </div>
+      <pre id="log" class="log p-4 h-96 overflow-auto">(no run yet)</pre>
+    </div>
+  </section>
+
+  <!-- JOBS -->
+  <section id="tab-jobs" class="tab-panel hidden">
+    <div class="bg-panel border border-border rounded-lg p-4 mb-3 flex flex-wrap gap-3">
+      <input id="jobs-q" placeholder="Search title / company / skills..."
+             class="flex-1 min-w-[240px] bg-panel2 border border-border rounded-md px-3 py-2 text-sm">
+      <select id="jobs-status" class="bg-panel2 border border-border rounded-md px-2 py-2 text-sm">
+        <option value="">any status</option>
+      </select>
+      <select id="jobs-platform" class="bg-panel2 border border-border rounded-md px-2 py-2 text-sm">
+        <option value="">any platform</option>
+      </select>
+      <button id="btn-refresh-jobs" class="px-4 py-2 bg-accent text-slate-900 font-medium rounded-md hover:opacity-90">Refresh</button>
+    </div>
+    <div class="bg-panel border border-border rounded-lg overflow-auto">
+      <table class="jobs w-full text-sm">
+        <thead class="bg-panel2 text-xs uppercase text-muted">
+          <tr>
+            <th class="px-3 py-2 text-left">Score</th>
+            <th class="px-3 py-2 text-left">Title</th>
+            <th class="px-3 py-2 text-left">Company</th>
+            <th class="px-3 py-2 text-left">Location</th>
+            <th class="px-3 py-2 text-left">Platform</th>
+            <th class="px-3 py-2 text-left">Status</th>
+            <th class="px-3 py-2 text-left">Notes</th>
+            <th class="px-3 py-2 text-left"></th>
+          </tr>
+        </thead>
+        <tbody id="jobs-body"></tbody>
+      </table>
+    </div>
+    <div id="jobs-count" class="text-xs text-muted mt-2"></div>
+  </section>
+
+  <!-- KANBAN -->
+  <section id="tab-kanban" class="tab-panel hidden">
+    <div id="kanban-board" class="grid grid-cols-2 md:grid-cols-4 gap-3"></div>
+  </section>
+
+  <!-- CONFIG / SETTINGS -->
+  <section id="tab-config" class="tab-panel hidden">
+    <div class="bg-panel border border-border rounded-lg p-4 mb-3 flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h2 class="font-semibold">Settings</h2>
+        <p class="text-xs text-muted mt-1">
+          Saved to <b>this browser only</b> &mdash; not to the server. Use
+          <button id="btn-forget" class="text-red-400 hover:underline">Forget everything</button>
+          to wipe all saved values (including credentials).
+        </p>
+      </div>
+      <div class="flex gap-2">
+        <button id="btn-reload-config" class="px-3 py-1 text-xs bg-panel2 border border-border rounded-md text-muted hover:text-white" title="Discard local changes and reload defaults from server">reset from server</button>
+        <button id="btn-save-config" class="px-4 py-2 bg-accent text-slate-900 text-sm font-medium rounded-md hover:opacity-90">Save</button>
+      </div>
+    </div>
+
+    <div class="grid gap-3">
+
+      <!-- Profile -->
+      <details open class="bg-panel border border-border rounded-lg">
+        <summary class="px-4 py-3 font-medium">Profile</summary>
+        <div class="p-4 border-t border-border grid md:grid-cols-2 gap-3">
+          <label class="block text-sm"><span class="cfg-lbl">Name</span><input data-cfg="profile.name" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Email</span><input data-cfg="profile.email" type="email" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Phone</span><input data-cfg="profile.phone" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Current location</span><input data-cfg="profile.location" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Experience (years)</span><input data-cfg="profile.experience_years" type="number" step="0.5" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Current role</span><input data-cfg="profile.current_role" class="cfg-input"></label>
+          <label class="block text-sm md:col-span-2"><span class="cfg-lbl">Resume path (optional)</span><input data-cfg="profile.resume_path" class="cfg-input" placeholder="e.g. C:/Users/you/resume.pdf"></label>
+        </div>
+      </details>
+
+      <!-- Search -->
+      <details open class="bg-panel border border-border rounded-lg">
+        <summary class="px-4 py-3 font-medium">Job search</summary>
+        <div class="p-4 border-t border-border grid gap-3">
+          <label class="block text-sm"><span class="cfg-lbl">Job titles (one per line)</span>
+            <textarea data-cfg="search.job_titles" data-array="lines" class="cfg-input h-24" placeholder="Software Engineer&#10;Backend Engineer&#10;Java Developer"></textarea></label>
+          <label class="block text-sm"><span class="cfg-lbl">Skills (one per line)</span>
+            <textarea data-cfg="search.skills" data-array="lines" class="cfg-input h-20" placeholder="Java&#10;Spring&#10;SQL"></textarea></label>
+          <label class="block text-sm"><span class="cfg-lbl">Excluded keywords (one per line)</span>
+            <textarea data-cfg="search.excluded_keywords" data-array="lines" class="cfg-input h-16" placeholder="intern&#10;volunteer"></textarea></label>
+          <div class="grid md:grid-cols-2 gap-3">
+            <label class="block text-sm"><span class="cfg-lbl">Excluded companies (one per line)</span>
+              <textarea data-cfg="company_intel.blacklist" data-array="lines" class="cfg-input h-20" placeholder="Accenture&#10;TCS"
+                title="Substring match, case-insensitive. e.g. 'Accenture' also blocks 'Accenture Solutions Pvt Ltd'."></textarea></label>
+            <label class="block text-sm"><span class="cfg-lbl">Only these companies (whitelist, optional)</span>
+              <textarea data-cfg="company_intel.whitelist" data-array="lines" class="cfg-input h-20" placeholder="Apple&#10;Cisco&#10;Barclays"
+                title="If set, ONLY companies matching one of these (substring, case-insensitive) are kept. Leave blank to allow any company not on the blacklist."></textarea></label>
+          </div>
+          <div class="grid md:grid-cols-2 gap-3">
+            <label class="block text-sm"><span class="cfg-lbl">Preferred cities (one per line)</span>
+              <textarea data-cfg="location.preferred_cities" data-array="lines" class="cfg-input h-20" placeholder="Pune&#10;Bangalore&#10;Remote"></textarea></label>
+            <div class="flex flex-col gap-2 pt-4">
+              <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="location.remote_only" class="accent-accent"> Remote only</label>
+              <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="location.willing_to_relocate" class="accent-accent"> Willing to relocate</label>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- Filters -->
+      <details open class="bg-panel border border-border rounded-lg">
+        <summary class="px-4 py-3 font-medium">Filters</summary>
+        <div class="p-4 border-t border-border grid md:grid-cols-3 gap-3">
+          <label class="block text-sm"><span class="cfg-lbl">Min experience (yrs)</span><input data-cfg="filters.min_experience" type="number" step="0.5" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Max experience (yrs)</span><input data-cfg="filters.max_experience" type="number" step="0.5" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Posted within (days)</span><input data-cfg="filters.posted_within_days" type="number" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Min salary (LPA)</span><input data-cfg="filters.min_salary_lpa" type="number" step="0.5" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Max salary (LPA)</span><input data-cfg="filters.max_salary_lpa" type="number" step="0.5" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Job type</span>
+            <select data-cfg="filters.job_type" class="cfg-input">
+              <option value="any">any</option>
+              <option value="full_time">full-time</option>
+              <option value="contract">contract</option>
+              <option value="part_time">part-time</option>
+              <option value="internship">internship</option>
+            </select>
+          </label>
+        </div>
+      </details>
+
+      <!-- Platforms -->
+      <details open class="bg-panel border border-border rounded-lg">
+        <summary class="px-4 py-3 font-medium">Platforms</summary>
+        <div class="p-4 border-t border-border grid grid-cols-2 md:grid-cols-4 gap-2">
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="platforms.linkedin.enabled" class="accent-accent"> linkedin</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="platforms.naukri.enabled" class="accent-accent"> naukri</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="platforms.indeed.enabled" class="accent-accent"> indeed</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="platforms.glassdoor.enabled" class="accent-accent"> glassdoor</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="platforms.instahyre.enabled" class="accent-accent"> instahyre</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="platforms.remoteok.enabled" class="accent-accent"> remoteok</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="platforms.foundit.enabled" class="accent-accent"> foundit</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="platforms.wellfound.enabled" class="accent-accent"> wellfound</label>
+        </div>
+      </details>
+
+      <!-- Naukri options -->
+      <details class="bg-panel border border-border rounded-lg">
+        <summary class="px-4 py-3 font-medium">Naukri options</summary>
+        <div class="p-4 border-t border-border grid gap-3">
+          <label class="block text-sm">
+            <span class="cfg-lbl">Source</span>
+            <select data-cfg="platforms.naukri.mode" class="cfg-input">
+              <option value="search">Keyword search (anonymous, uses titles &amp; cities below)</option>
+              <option value="recommended">Recommended jobs (logs in, uses your Naukri profile)</option>
+            </select>
+          </label>
+          <p class="text-xs text-muted">
+            <strong>Recommended</strong> mode logs in with your Naukri email/password and pulls jobs
+            from <code>/mnjuser/recommendedjobs</code>. Higher Easy-Apply ratio, so auto-apply
+            succeeds more often. Requires Naukri credentials below.
+          </p>
+        </div>
+      </details>
+
+      <!-- AI Matching -->
+      <details open class="bg-panel border border-border rounded-lg">
+        <summary class="px-4 py-3 font-medium">AI scoring</summary>
+        <div class="p-4 border-t border-border grid md:grid-cols-3 gap-3">
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="ai_matching.enabled" class="accent-accent"> Enable AI scoring</label>
+          <label class="block text-sm"><span class="cfg-lbl">Model</span>
+            <select data-cfg="ai_matching.model" class="cfg-input">
+              <option value="gpt-4o-mini">gpt-4o-mini (cheap, good)</option>
+              <option value="gpt-4o">gpt-4o (pricier)</option>
+              <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+            </select>
+          </label>
+          <label class="block text-sm"><span class="cfg-lbl">Min match score (0-100)</span><input data-cfg="ai_matching.min_match_score" type="number" min="0" max="100" class="cfg-input"></label>
+        </div>
+      </details>
+
+      <!-- Auto-apply -->
+      <details open class="bg-panel border border-border rounded-lg">
+        <summary class="px-4 py-3 font-medium">Auto-apply</summary>
+        <div class="p-4 border-t border-border grid gap-3">
+          <div class="grid md:grid-cols-3 gap-3">
+            <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="auto_apply.enabled" class="accent-accent"> Enabled</label>
+            <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="auto_apply.headless" class="accent-accent"> Headless browser</label>
+            <label class="block text-sm"><span class="cfg-lbl">Daily limit</span><input data-cfg="auto_apply.daily_limit" type="number" min="0" class="cfg-input"></label>
+            <label class="block text-sm"><span class="cfg-lbl">Naukri rate limit (sec between applies)</span><input data-cfg="auto_apply.rate_limit.naukri" type="number" min="0" class="cfg-input"></label>
+          </div>
+          <div class="border-t border-border pt-3">
+            <div class="text-xs text-muted uppercase mb-2">Screening answers (used by Naukri chatbot)</div>
+            <div class="grid md:grid-cols-2 gap-3">
+              <label class="block text-sm"><span class="cfg-lbl">Current CTC (LPA)</span><input data-cfg="auto_apply.screening_answers.current_ctc" class="cfg-input"></label>
+              <label class="block text-sm"><span class="cfg-lbl">Expected CTC (LPA)</span><input data-cfg="auto_apply.screening_answers.expected_ctc" class="cfg-input"></label>
+              <label class="block text-sm"><span class="cfg-lbl">Notice period (days)</span><input data-cfg="auto_apply.screening_answers.notice_period" class="cfg-input"></label>
+              <label class="block text-sm"><span class="cfg-lbl">Total experience (yrs)</span><input data-cfg="auto_apply.screening_answers.total_experience" class="cfg-input"></label>
+              <label class="block text-sm"><span class="cfg-lbl">Current location</span><input data-cfg="auto_apply.screening_answers.current_location" class="cfg-input"></label>
+              <label class="block text-sm"><span class="cfg-lbl">Willing to relocate</span>
+                <select data-cfg="auto_apply.screening_answers.willing_to_relocate" class="cfg-input"><option value="Yes">Yes</option><option value="No">No</option></select>
+              </label>
+              <label class="block text-sm"><span class="cfg-lbl">Highest qualification</span><input data-cfg="auto_apply.screening_answers.highest_qualification" class="cfg-input" placeholder="e.g. B.Tech"></label>
+              <label class="block text-sm"><span class="cfg-lbl">Current designation</span><input data-cfg="auto_apply.screening_answers.current_designation" class="cfg-input"></label>
+              <label class="block text-sm md:col-span-2"><span class="cfg-lbl">Skills to answer "yes" to (one per line)</span>
+                <textarea data-cfg="auto_apply.screening_answers.skills_yes" data-array="lines" class="cfg-input h-20" placeholder="Java&#10;Spring Boot"></textarea></label>
+              <label class="block text-sm"><span class="cfg-lbl">Default skill answer</span>
+                <select data-cfg="auto_apply.screening_answers.default_skill_answer" class="cfg-input"><option value="Yes">Yes</option><option value="No">No</option></select>
+              </label>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- CREDENTIALS (sensitive) -->
+      <details class="bg-panel border-2 border-red-900/70 rounded-lg">
+        <summary class="px-4 py-3 font-medium flex items-center gap-2">
+          <span class="text-red-400">&#9888;</span>
+          <span>Credentials</span>
+          <span class="text-xs text-muted font-normal">(stored in this browser)</span>
+        </summary>
+        <div class="p-4 border-t border-red-900/70">
+          <div class="mb-3 p-3 bg-red-950/40 border border-red-900/70 rounded-md text-xs text-red-200 leading-relaxed">
+            These fields are saved in your browser's <code>localStorage</code> as <b>plain text</b>.
+            Anyone with access to this browser profile, or any malicious browser extension, can read them.
+            Use a dedicated browser profile for this app, and click <b>Forget everything</b> when you're done.
+          </div>
+          <div class="grid md:grid-cols-2 gap-3">
+            <label class="block text-sm"><span class="cfg-lbl">OpenAI API key</span>
+              <input data-cfg="__creds.openai_api_key" type="password" autocomplete="off" class="cfg-input" placeholder="sk-...">
+            </label>
+            <label class="block text-sm"><span class="cfg-lbl">LinkedIn li_at cookie (optional)</span>
+              <input data-cfg="__creds.li_at_cookie" type="password" autocomplete="off" class="cfg-input" placeholder="AQED...">
+            </label>
+            <label class="block text-sm"><span class="cfg-lbl">Naukri email</span>
+              <input data-cfg="__creds.naukri_email" type="email" autocomplete="off" class="cfg-input">
+            </label>
+            <label class="block text-sm"><span class="cfg-lbl">Naukri password</span>
+              <input data-cfg="__creds.naukri_password" type="password" autocomplete="off" class="cfg-input">
+            </label>
+          </div>
+          <div class="mt-3">
+            <label class="inline-flex items-center gap-2 text-xs text-muted">
+              <input type="checkbox" id="cfg-show-secrets" class="accent-accent"> Show values
+            </label>
+          </div>
+        </div>
+      </details>
+
+      <!-- Advanced (collapsed by default) -->
+      <details class="bg-panel border border-border rounded-lg">
+        <summary class="px-4 py-3 font-medium text-muted">Advanced &mdash; output &amp; extras</summary>
+        <div class="p-4 border-t border-border grid md:grid-cols-2 gap-3">
+          <label class="block text-sm"><span class="cfg-lbl">Max results per platform</span><input data-cfg="output.max_results_per_platform" type="number" min="1" class="cfg-input"></label>
+          <label class="block text-sm"><span class="cfg-lbl">Max results per company (0 = unlimited)</span><input data-cfg="output.max_results_per_company" type="number" min="0" class="cfg-input" title="Caps how many jobs from a single company can fill the results. Default 5 prevents spam-posters like Accenture from dominating."></label>
+          <label class="block text-sm"><span class="cfg-lbl">Parallel scraper workers</span><input data-cfg="scraper.workers" type="number" min="1" max="8" class="cfg-input" title="How many scrapers run at once. Each spawns its own headless Chrome. 2 is a safe default; raise only on a beefy machine."></label>
+          <label class="block text-sm"><span class="cfg-lbl">Report format</span>
+            <select data-cfg="output.format" class="cfg-input">
+              <option value="both">both (csv + html)</option>
+              <option value="csv">csv only</option>
+              <option value="html">html only</option>
+              <option value="json">json only</option>
+            </select>
+          </label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="output.auto_open_report" class="accent-accent"> Auto-open report after run</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="notifications.desktop" class="accent-accent"> Desktop notifications</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="gap_analysis.enabled" class="accent-accent"> Gap analysis</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="resume_tailoring.enabled" class="accent-accent"> Resume tailoring</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="interview_prep.enabled" class="accent-accent"> Interview prep</label>
+          <label class="flex items-center gap-2 text-sm"><input type="checkbox" data-cfg="linkedin_network.enabled" class="accent-accent"> LinkedIn network find</label>
+        </div>
+      </details>
+
+    </div>
+  </section>
+
+  <!-- RUNS -->
+  <section id="tab-runs" class="tab-panel hidden">
+    <div class="bg-panel border border-border rounded-lg overflow-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-panel2 text-xs uppercase text-muted">
+          <tr>
+            <th class="px-3 py-2 text-left">Run at (UTC)</th>
+            <th class="px-3 py-2 text-left">Platforms</th>
+            <th class="px-3 py-2 text-right">Scraped</th>
+            <th class="px-3 py-2 text-right">New</th>
+            <th class="px-3 py-2 text-right">Duration (s)</th>
+          </tr>
+        </thead>
+        <tbody id="runs-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+  // -------- tiny helpers -------- //
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+  const fmt = (s) => (s == null ? '' : String(s));
+  const esc = (s) => fmt(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+  const STATUSES = ["new","saved","applied","interview","offer","rejected","hidden"];
+
+  function toast(msg, kind) {
+    const el = $('#toast');
+    el.textContent = msg;
+    el.className = 'toast show ' + (kind || '');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => el.className = 'toast', 2800);
+  }
+
+  function scoreClass(n) {
+    const v = Number(n) || 0;
+    if (v >= 70) return '';
+    if (v >= 40) return 'mid';
+    return 'low';
+  }
+
+  // -------- tabs -------- //
+  function showTab(name) {
+    $$('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+    $$('.tab-panel').forEach(p => p.classList.toggle('hidden', p.id !== 'tab-' + name));
+    if (name === 'jobs') loadJobs();
+    if (name === 'kanban') loadKanban();
+    if (name === 'config') loadConfig();
+    if (name === 'runs') loadRuns();
+  }
+  $$('.tab-btn').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
+
+  // -------- stats -------- //
+  async function loadStats() {
+    try {
+      const r = await fetch('/api/stats');
+      const s = await r.json();
+      $('#stat-total').textContent = s.total_jobs ?? 0;
+      $('#stat-new24').textContent = s.new_last_24h ?? 0;
+      $('#stat-applied').textContent = (s.by_status || {}).applied ?? 0;
+      $('#stat-interviews').textContent = (s.by_status || {}).interview ?? 0;
+      $('#stat-platforms-db').textContent = s.platforms_with_jobs ?? 0;
+      $('#stat-platforms-enabled').textContent = s.platforms_enabled ?? 0;
+    } catch (e) { console.warn(e); }
+  }
+
+  // -------- platforms (for Run tab + jobs filter) -------- //
+  async function loadPlatforms() {
+    const r = await fetch('/api/platforms');
+    const d = await r.json();
+    const rows = d.platforms || [];
+    const runList = $('#platform-list');
+    runList.innerHTML = '';
+    const platformSelect = $('#jobs-platform');
+    platformSelect.innerHTML = '<option value="">any platform</option>';
+    rows.forEach(p => {
+      const id = 'plat-' + p.name;
+      const label = document.createElement('label');
+      label.className = 'flex items-center gap-2 text-sm';
+      const checked = p.enabled ? 'checked' : '';
+      const disabled = !p.registered ? 'disabled title="scraper not registered"' : '';
+      label.innerHTML = `<input type="checkbox" id="${id}" class="accent-accent"
+                               data-name="${esc(p.name)}" ${checked} ${disabled}>
+                        <span>${esc(p.name)}${p.registered ? '' : ' <span class="text-muted text-xs">(n/a)</span>'}</span>`;
+      runList.appendChild(label);
+
+      const opt = document.createElement('option');
+      opt.value = p.name; opt.textContent = p.name;
+      platformSelect.appendChild(opt);
+    });
+    const statusSelect = $('#jobs-status');
+    statusSelect.innerHTML = '<option value="">any status</option>' +
+      STATUSES.map(s => `<option value="${s}">${s}</option>`).join('');
+  }
+
+  // -------- run agent + log tail -------- //
+  let runTaskId = null;
+  let since = 0;
+  let polling = null;
+
+  $('#btn-run').addEventListener('click', async () => {
+    const platforms = $$('#platform-list input[type=checkbox]:checked').map(c => c.dataset.name);
+    if (!platforms.length) { toast('Select at least one platform', 'error'); return; }
+
+    // Auto-save the settings form on Run so users don't lose changes they've
+    // been tweaking but haven't clicked "Save" on yet.
+    saveLocal();
+    const runCfg = buildRunConfig();
+
+    const body = {
+      platforms,
+      new_only: $('#flag-new-only').checked,
+      no_apply: $('#flag-no-apply').checked,
+      verbose:  $('#flag-verbose').checked,
+      config:   runCfg,
+    };
+    $('#btn-run').disabled = true;
+    $('#btn-stop').disabled = false;
+    $('#log').textContent = '';
+    since = 0;
+
+    const r = await fetch('/api/run', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if (d.error) { toast(d.error, 'error'); $('#btn-run').disabled = false; return; }
+    runTaskId = d.task_id;
+    $('#run-task-id').textContent = 'task: ' + runTaskId;
+    $('#connection-dot').className = 'inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse';
+    $('#connection-label').textContent = 'running ' + runTaskId;
+    if (polling) clearInterval(polling);
+    polling = setInterval(pollLogs, 1000);
+  });
+
+  async function pollLogs() {
+    if (!runTaskId) return;
+    try {
+      const r = await fetch(`/api/logs/${runTaskId}?since=${since}`);
+      if (r.status === 404) {
+        clearInterval(polling); polling = null;
+        const stale = runTaskId;
+        runTaskId = null;
+        $('#btn-run').disabled = false;
+        $('#btn-stop').disabled = true;
+        $('#connection-dot').className = 'inline-block w-2 h-2 rounded-full bg-red-400';
+        $('#connection-label').textContent = 'stale task ' + stale + ' (server restarted) - click Run again';
+        toast('Previous task no longer exists on the server. Click Run again.', 'error');
+        return;
+      }
+      if (!r.ok) return;
+      const d = await r.json();
+      if (d.lines && d.lines.length) {
+        const logEl = $('#log');
+        logEl.textContent += d.lines.join('\n') + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+        since = d.next_since;
+      }
+      $('#run-elapsed').textContent = (d.elapsed_seconds != null)
+        ? ('elapsed ' + Math.round(d.elapsed_seconds) + 's')
+        : '';
+      $('#run-lines').textContent = since + ' lines';
+      if (d.state === 'done') {
+        clearInterval(polling); polling = null;
+        $('#btn-run').disabled = false;
+        $('#btn-stop').disabled = true;
+        $('#connection-dot').className = 'inline-block w-2 h-2 rounded-full bg-green-400';
+        $('#connection-label').textContent = 'done (rc=' + d.returncode + ')';
+        loadStats();
+      }
+    } catch (e) { console.warn(e); }
+  }
+
+  $('#btn-stop').addEventListener('click', async () => {
+    if (!runTaskId) return;
+    await fetch(`/api/stop/${runTaskId}`, {method:'POST'});
+    toast('Stop requested', 'ok');
+  });
+
+  $('#btn-clear-log').addEventListener('click', () => { $('#log').textContent = ''; });
+
+  // -------- jobs table -------- //
+  async function loadJobs() {
+    const q = $('#jobs-q').value.trim();
+    const status = $('#jobs-status').value;
+    const platform = $('#jobs-platform').value;
+    const params = new URLSearchParams({ q, status, platform, limit: 200 });
+    const r = await fetch('/api/jobs?' + params.toString());
+    const d = await r.json();
+    const body = $('#jobs-body');
+    body.innerHTML = (d.jobs || []).map(renderJobRow).join('');
+    $('#jobs-count').textContent = `${d.count || 0} rows`;
+    body.querySelectorAll('button[data-save]').forEach(b => b.addEventListener('click', onSaveJob));
+  }
+
+  function renderJobRow(j) {
+    const score = Number(j.match_score || 0);
+    const statusOpts = STATUSES.map(s =>
+      `<option value="${s}" ${j.status === s ? 'selected' : ''}>${s}</option>`
+    ).join('');
+    return `<tr class="border-t border-border hover:bg-panel2/50">
+      <td class="px-3 py-2"><span class="score ${scoreClass(score)}">${score.toFixed(0)}</span></td>
+      <td class="px-3 py-2"><a class="text-accent hover:underline" href="${esc(j.url)}" target="_blank" rel="noopener">${esc(j.title)}</a></td>
+      <td class="px-3 py-2">${esc(j.company)}</td>
+      <td class="px-3 py-2 text-muted">${esc(j.location)}</td>
+      <td class="px-3 py-2"><span class="pill">${esc(j.platform)}</span></td>
+      <td class="px-3 py-2">
+        <select data-id="${j.id}" data-field="status"
+                class="bg-panel2 border border-border rounded-md px-2 py-1 text-xs">${statusOpts}</select>
+      </td>
+      <td class="px-3 py-2">
+        <input data-id="${j.id}" data-field="notes" value="${esc(j.notes || '')}"
+               class="bg-panel2 border border-border rounded-md px-2 py-1 text-xs w-full" />
+      </td>
+      <td class="px-3 py-2"><button data-save data-id="${j.id}"
+        class="px-2 py-1 text-xs bg-accent text-slate-900 rounded-md hover:opacity-90">Save</button></td>
+    </tr>`;
+  }
+
+  async function onSaveJob(ev) {
+    const id = ev.currentTarget.dataset.id;
+    const status = document.querySelector(`select[data-id="${id}"][data-field="status"]`).value;
+    const notes  = document.querySelector(`input[data-id="${id}"][data-field="notes"]`).value;
+    const r = await fetch(`/api/jobs/${id}/status`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ status, notes }),
+    });
+    const d = await r.json();
+    if (d.error) return toast(d.error, 'error');
+    if (!d.rowcount) return toast('No row updated (already gone?)', 'error');
+    toast('Saved · status=' + status, 'ok');
+    loadStats();
+  }
+
+  $('#btn-refresh-jobs').addEventListener('click', loadJobs);
+  $('#jobs-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadJobs(); });
+  $('#jobs-status').addEventListener('change', loadJobs);
+  $('#jobs-platform').addEventListener('change', loadJobs);
+
+  // -------- kanban -------- //
+  async function loadKanban() {
+    const board = $('#kanban-board');
+    board.innerHTML = '';
+    const cols = ["new","saved","applied","interview","offer","rejected","hidden"];
+    const byStatus = {};
+    for (const s of cols) byStatus[s] = [];
+    const r = await fetch('/api/jobs?limit=500');
+    const d = await r.json();
+    (d.jobs || []).forEach(j => { if (byStatus[j.status]) byStatus[j.status].push(j); });
+    cols.forEach(s => {
+      const items = byStatus[s];
+      const col = document.createElement('div');
+      col.className = 'bg-panel border border-border rounded-lg flex flex-col';
+      col.innerHTML = `
+        <div class="px-3 py-2 border-b border-border flex items-center justify-between">
+          <span class="text-xs uppercase text-muted">${s}</span>
+          <span class="text-xs text-muted">${items.length}</span>
+        </div>
+        <div class="p-2 flex flex-col gap-2 max-h-[70vh] overflow-auto">
+          ${items.map(j => `
+            <a href="${esc(j.url)}" target="_blank" rel="noopener"
+               class="block bg-panel2 border border-border rounded-md p-2 hover:border-accent">
+              <div class="text-sm">${esc(j.title)}</div>
+              <div class="text-xs text-muted">${esc(j.company)} · ${esc(j.platform)}</div>
+              <div class="text-xs text-muted mt-1">score ${Number(j.match_score||0).toFixed(0)}</div>
+            </a>`).join('') || '<div class="text-xs text-muted p-3 text-center">empty</div>'}
+        </div>`;
+      board.appendChild(col);
+    });
+  }
+
+  // -------- settings form (localStorage-backed) -------- //
+  const LS_KEY = 'jh_settings_v1';
+
+  // Dotted-path helpers for nested config objects.
+  function setByPath(obj, path, value) {
+    const parts = path.split('.');
+    let cur = obj;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const k = parts[i];
+      if (typeof cur[k] !== 'object' || cur[k] === null || Array.isArray(cur[k])) cur[k] = {};
+      cur = cur[k];
+    }
+    cur[parts[parts.length - 1]] = value;
+  }
+  function getByPath(obj, path) {
+    const parts = path.split('.');
+    let cur = obj;
+    for (const k of parts) {
+      if (cur == null || typeof cur !== 'object') return undefined;
+      cur = cur[k];
+    }
+    return cur;
+  }
+
+  // Strip `${VAR}` env-placeholder strings from server-provided config so
+  // they never leak into form fields (users see empty inputs they can fill).
+  function stripEnvPlaceholders(v) {
+    if (typeof v === 'string' && /^\$\{[A-Z0-9_]+\}$/i.test(v.trim())) return '';
+    if (Array.isArray(v)) return v.map(stripEnvPlaceholders);
+    if (v && typeof v === 'object') {
+      const out = {};
+      for (const k of Object.keys(v)) out[k] = stripEnvPlaceholders(v[k]);
+      return out;
+    }
+    return v;
+  }
+
+  function populateForm(cfg, creds) {
+    cfg = cfg || {};
+    creds = creds || {};
+    document.querySelectorAll('[data-cfg]').forEach(el => {
+      const path = el.getAttribute('data-cfg');
+      let v;
+      if (path.startsWith('__creds.')) v = creds[path.slice('__creds.'.length)];
+      else v = getByPath(cfg, path);
+
+      if (el.type === 'checkbox') {
+        el.checked = !!v;
+      } else if (el.dataset.array === 'lines') {
+        el.value = Array.isArray(v) ? v.join('\n') : (v == null ? '' : String(v));
+      } else if (el.dataset.array === 'csv') {
+        el.value = Array.isArray(v) ? v.join(', ') : (v == null ? '' : String(v));
+      } else {
+        el.value = v == null ? '' : String(v);
+      }
+    });
+  }
+
+  function collectForm() {
+    const cfg = {};
+    const creds = {};
+    document.querySelectorAll('[data-cfg]').forEach(el => {
+      const path = el.getAttribute('data-cfg');
+      let val;
+      let skip = false;
+      if (el.type === 'checkbox') {
+        val = el.checked;
+      } else if (el.type === 'number') {
+        if (el.value.trim() === '') {
+          // Empty number fields are NOT serialized — that way they don't
+          // overwrite a perfectly fine on-disk default with `null` after
+          // the server-side deep-merge. Re-populating the form on reload
+          // just leaves the field empty, which is the right UX.
+          skip = true;
+        } else {
+          val = Number(el.value);
+          if (Number.isNaN(val)) skip = true;
+        }
+      } else if (el.dataset.array === 'lines') {
+        val = el.value.split('\n').map(s => s.trim()).filter(Boolean);
+      } else if (el.dataset.array === 'csv') {
+        val = el.value.split(',').map(s => s.trim()).filter(Boolean);
+      } else {
+        val = el.value;
+      }
+      if (skip) return;
+      if (path.startsWith('__creds.')) {
+        creds[path.slice('__creds.'.length)] = val;
+      } else {
+        setByPath(cfg, path, val);
+      }
+    });
+    return { cfg, creds };
+  }
+
+  // Build the config object sent to the server for a run: preferences merged
+  // with credentials wired into the right YAML paths. Only include creds the
+  // user actually filled in — keeps env-fallbacks working otherwise.
+  function buildRunConfig() {
+    const { cfg, creds } = collectForm();
+    if (creds.openai_api_key) {
+      cfg.ai_matching = cfg.ai_matching || {};
+      cfg.ai_matching.openai_api_key = creds.openai_api_key;
+    }
+    if (creds.li_at_cookie) {
+      cfg.platforms = cfg.platforms || {};
+      cfg.platforms.linkedin = cfg.platforms.linkedin || {};
+      cfg.platforms.linkedin.li_at_cookie = creds.li_at_cookie;
+    }
+    if (creds.naukri_email || creds.naukri_password) {
+      cfg.platforms = cfg.platforms || {};
+      cfg.platforms.naukri = cfg.platforms.naukri || {};
+      if (creds.naukri_email) cfg.platforms.naukri.email = creds.naukri_email;
+      if (creds.naukri_password) cfg.platforms.naukri.password = creds.naukri_password;
+    }
+    return cfg;
+  }
+
+  function saveLocal() {
+    const { cfg, creds } = collectForm();
+    try {
+      localStorage.setItem(LS_KEY, JSON.stringify({ cfg, creds, saved_at: Date.now() }));
+      return true;
+    } catch (e) {
+      console.warn('localStorage save failed', e);
+      return false;
+    }
+  }
+
+  function loadLocal() {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw);
+    } catch (e) {
+      console.warn('localStorage load failed', e);
+      return null;
+    }
+  }
+
+  async function loadConfig({ fromServer = false } = {}) {
+    if (!fromServer) {
+      const local = loadLocal();
+      if (local) { populateForm(local.cfg, local.creds); return; }
+    }
+    // Bootstrap defaults from the server's config.yaml (no secrets — they're
+    // `${VAR}` placeholders that we strip).
+    const r = await fetch('/api/config');
+    if (!r.ok) { toast('config.yaml not found on server', 'error'); return; }
+    const d = await r.json();
+    populateForm(stripEnvPlaceholders(d.config || {}), {});
+  }
+
+  $('#btn-save-config').addEventListener('click', () => {
+    if (saveLocal()) toast('Saved to this browser', 'ok');
+    else toast('Could not save (localStorage blocked?)', 'error');
+  });
+
+  $('#btn-reload-config').addEventListener('click', () => loadConfig({ fromServer: true }));
+
+  $('#btn-forget').addEventListener('click', (ev) => {
+    ev.preventDefault();
+    if (!confirm('Clear ALL saved settings and credentials from this browser?')) return;
+    localStorage.removeItem(LS_KEY);
+    populateForm({}, {});
+    toast('Settings cleared', 'ok');
+  });
+
+  // Toggle credential visibility.
+  document.addEventListener('change', (ev) => {
+    if (ev.target && ev.target.id === 'cfg-show-secrets') {
+      document.querySelectorAll('[data-cfg^="__creds."]').forEach(el => {
+        el.type = ev.target.checked ? 'text' : 'password';
+      });
+    }
+  });
+
+  // -------- runs -------- //
+  async function loadRuns() {
+    const r = await fetch('/api/runs');
+    const d = await r.json();
+    const body = $('#runs-body');
+    body.innerHTML = (d.runs || []).map(run => `
+      <tr class="border-t border-border">
+        <td class="px-3 py-2 text-muted">${esc(run.run_at)}</td>
+        <td class="px-3 py-2">${esc(run.platforms)}</td>
+        <td class="px-3 py-2 text-right">${run.total_scraped}</td>
+        <td class="px-3 py-2 text-right">${run.new_jobs}</td>
+        <td class="px-3 py-2 text-right">${Number(run.duration_seconds || 0).toFixed(1)}</td>
+      </tr>`).join('') || '<tr><td colspan="5" class="px-3 py-6 text-center text-muted">no runs yet</td></tr>';
+  }
+
+  // Keep the Run-tab platform checkboxes in sync with the Settings form.
+  // When users toggle a platform in Settings we reflect it in the Run list
+  // (and on Save we persist both). Users can still override per-run.
+  function syncRunPlatformsFromSettings() {
+    const { cfg } = collectForm();
+    const plats = (cfg && cfg.platforms) || {};
+    $$('#platform-list input[type=checkbox]').forEach(c => {
+      const name = c.dataset.name;
+      if (name && plats[name] && typeof plats[name].enabled === 'boolean') {
+        c.checked = !!plats[name].enabled;
+      }
+    });
+  }
+
+  // Auto-save-on-change for the settings form (debounced) — cheap safety net.
+  let _saveTimer = null;
+  document.addEventListener('input', (ev) => {
+    if (!ev.target || !ev.target.matches('[data-cfg]')) return;
+    clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(saveLocal, 800);
+  });
+  document.addEventListener('change', (ev) => {
+    if (!ev.target || !ev.target.matches('[data-cfg]')) return;
+    saveLocal();
+    if (ev.target.getAttribute('data-cfg').startsWith('platforms.')) {
+      syncRunPlatformsFromSettings();
+    }
+  });
+
+  // -------- boot -------- //
+  loadStats();
+  loadPlatforms().then(() => loadConfig().then(syncRunPlatformsFromSettings));
+  setInterval(loadStats, 15000);
+</script>
+</body>
+</html>

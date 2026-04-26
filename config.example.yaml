@@ -1,0 +1,137 @@
+# Job Hunt AI Agent — config template.
+# Copy this file to `config.yaml` and fill in your details. NEVER commit config.yaml.
+profile:
+  name: <YOUR_FULL_NAME>
+  email: <YOUR_EMAIL>
+  phone: '<YOUR_PHONE>'
+  location: <YOUR_CITY>
+  experience_years: 0
+  current_role: <YOUR_CURRENT_ROLE>
+  resume_path: <ABSOLUTE_PATH_TO_RESUME_PDF>
+search:
+  job_titles:
+    - Software Engineer
+    - Backend Engineer
+  skills:
+    - Python
+    - Java
+    - SQL
+    - Docker
+    - AWS
+    - REST APIs
+  excluded_keywords:
+    - volunteer
+location:
+  preferred_cities:
+    - Bangalore
+    - Pune
+    - Hyderabad
+    - Remote
+  remote_only: false
+  willing_to_relocate: true
+filters:
+  min_experience: 0
+  max_experience: 10
+  min_salary_lpa: 0
+  max_salary_lpa: 100
+  job_type: any
+  posted_within_days: 15
+platforms:
+  linkedin:
+    enabled: false
+    li_at_cookie: ${LI_AT_COOKIE}
+  naukri:
+    enabled: true
+    email: ${NAUKRI_EMAIL}
+    password: ${NAUKRI_PASSWORD}
+    # mode: "search" (anonymous keyword search) or
+    #       "recommended" (logs in, scrapes /mnjuser/recommendedjobs).
+    mode: recommended
+  indeed:
+    enabled: true
+  glassdoor:
+    enabled: false
+  instahyre:
+    enabled: false
+  remoteok:
+    enabled: true
+  foundit:
+    enabled: false
+  wellfound:
+    enabled: false
+ai_matching:
+  enabled: false
+  openai_api_key: ${OPENAI_API_KEY}
+  model: gpt-4o-mini
+  min_match_score: 50
+company_intel:
+  enabled: false
+  blacklist: []
+  whitelist: []
+auto_apply:
+  enabled: false
+  daily_limit: 5
+  headless: false
+  chrome_profile_dir: ''
+  platforms:
+    - naukri
+  rate_limit:
+    naukri: 60
+    linkedin: 90
+    default: 60
+  screening_answers:
+    current_ctc: '<CURRENT_CTC_LPA>'
+    expected_ctc: '<EXPECTED_CTC_LPA>'
+    notice_period: '<NOTICE_PERIOD_DAYS>'
+    total_experience: '<TOTAL_YRS_EXP>'
+    current_location: '<YOUR_CITY>'
+    willing_to_relocate: 'Yes'
+    highest_qualification: '<DEGREE>'
+    current_designation: '<JOB_TITLE>'
+    years_default: '<TOTAL_YRS_EXP>'
+    date_of_birth: '<DD/MM/YYYY>'
+    have_resigned: 'No'
+    english_proficient: 'Yes'
+    can_join_immediately: 'Yes'
+    days_to_join: '15'
+    skills_yes:
+      - Python
+      - Java
+      - SQL
+      - Docker
+      - AWS
+    default_skill_answer: 'Yes'
+    custom_answers: {}
+resume_tailoring:
+  enabled: false
+  top_n: 5
+interview_prep:
+  enabled: false
+  top_n: 5
+gap_analysis:
+  enabled: false
+  top_n: 25
+linkedin_network:
+  enabled: false
+  auto_connect: false
+  top_n: 5
+notifications:
+  desktop: true
+  email: false
+  telegram: false
+  slack: false
+  whatsapp: false
+export:
+  json: true
+  google_sheets: false
+  notion: false
+scheduler:
+  run_time: 08:00
+output:
+  results_dir: results
+  format: both
+  max_results_per_platform: 50
+  max_results_per_company: 5
+  auto_open_report: false
+scraper:
+  workers: 2
