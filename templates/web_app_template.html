@@ -286,13 +286,14 @@
             <span class="cfg-lbl">Source</span>
             <select data-cfg="platforms.naukri.mode" class="cfg-input">
               <option value="search">Keyword search (anonymous, uses titles &amp; cities below)</option>
-              <option value="recommended">Recommended jobs (logs in, uses your Naukri profile)</option>
+              <option value="recommended">Recommended first, then keyword search if &lt; 50</option>
             </select>
           </label>
           <p class="text-xs text-muted">
-            <strong>Recommended</strong> mode logs in with your Naukri email/password and pulls jobs
-            from <code>/mnjuser/recommendedjobs</code>. Higher Easy-Apply ratio, so auto-apply
-            succeeds more often. Requires Naukri credentials below.
+            <strong>Recommended</strong> mode logs in and pulls jobs from
+            <code>/mnjuser/recommendedjobs</code> first (higher Easy-Apply ratio). If fewer than
+            <code>max_results_per_platform</code> (default 50) are found, it supplements with
+            keyword × city search. Requires Naukri credentials below.
           </p>
         </div>
       </details>

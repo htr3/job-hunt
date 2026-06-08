@@ -55,7 +55,7 @@ except ImportError:  # pragma: no cover
         pass
 
 from job_db import JobDatabase, resolve_db_path
-from naukri_auth import naukri_login
+from naukri_auth import naukri_login, naukri_update_resume
 from scrapers.base_scraper import BaseScraper, handle_driver_error
 
 logger = logging.getLogger("auto_apply")
@@ -141,6 +141,7 @@ class AutoApplier:
         self.platforms: list[str] = [p.lower() for p in (aa.get("platforms") or ["naukri"])]
         self.rate_limits: dict[str, int] = aa.get("rate_limit") or {"naukri": 60, "default": 60}
         self.screening: dict[str, Any] = aa.get("screening_answers") or {}
+        self.update_resume: bool = bool(aa.get("update_resume", False))
 
         output = self.config.get("output", {}) or {}
         self._db = JobDatabase(db_path=resolve_db_path(output.get("results_dir", "results")))
@@ -173,6 +174,14 @@ class AutoApplier:
             if (getattr(j, "platform", "") or "").lower() in self.platforms
             and (getattr(j, "url", "") or "")
         ]
+        # Recommended Naukri feed jobs first, then generic keyword search.
+        eligible.sort(
+            key=lambda j: (
+                0 if (getattr(j, "source", "") or "").lower() == "recommended" else 1,
+                -(getattr(j, "match_score", 0.0) or 0.0),
+                getattr(j, "title", "") or "",
+            )
+        )
         if not eligible:
             logger.info(
                 "auto_apply: no eligible jobs (enabled platforms: %s)", self.platforms
@@ -280,9 +289,17 @@ class AutoApplier:
         except WebDriverException as e:
             logger.error("auto_apply: could not start Chrome: %s", e)
             return False
-        return naukri_login(
+        if not naukri_login(
             driver, self._naukri_email, self._naukri_password, logger=logger
-        )
+        ):
+            return False
+        if self.update_resume:
+            resume_path = (self.config.get("profile", {}) or {}).get("resume_path") or ""
+            if resume_path:
+                naukri_update_resume(driver, resume_path, logger=logger)
+            else:
+                logger.warning("auto_apply: update_resume enabled but profile.resume_path is empty.")
+        return True
 
     # ------------------------------------------------------------------ apply
     def _apply_one(self, job: Any) -> bool:

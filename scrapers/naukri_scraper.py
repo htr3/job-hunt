@@ -1,18 +1,14 @@
 """Naukri.com scraper — Selenium.
 
-Two modes (configured via `platforms.naukri.mode` in config.yaml):
+Modes (configured via `platforms.naukri.mode` in config.yaml):
 
-  - "search"       (default) — Anonymous keyword/city search via the public
-                                /<title>-jobs-in-<city> URL pattern. No login
-                                needed. This is the original behavior.
+  - "search"       — Anonymous keyword/city search via the public
+                     /<title>-jobs-in-<city> URL pattern. No login needed.
 
-  - "recommended"            — Logs in with NAUKRI_EMAIL / NAUKRI_PASSWORD,
-                                then scrapes /mnjuser/recommendedjobs (the
-                                personalized feed Naukri builds from your
-                                profile). Higher Easy-Apply ratio, so the
-                                downstream auto_apply step succeeds far more
-                                often. Skips the title × city loop entirely
-                                because Naukri's algorithm picks the matches.
+  - "recommended"  — Logs in, scrapes /mnjuser/recommendedjobs first (higher
+                     Easy-Apply ratio). If fewer than
+                     `output.max_results_per_platform` jobs are found (default
+                     50), supplements with the generic title × city search.
 """
 from __future__ import annotations
 
@@ -20,7 +16,7 @@ import re
 import time
 from typing import Any
 
-from .base_scraper import BaseScraper, Job, handle_driver_error
+from .base_scraper import BaseScraper, Job, handle_driver_error, is_dead_driver_error
 
 
 def _slug(text: str) -> str:
@@ -71,7 +67,20 @@ class NaukriScraper(BaseScraper):
         """Override base search_all to dispatch on `mode`."""
         mode = self._mode()
         if mode == "recommended":
-            return self._search_recommended()
+            recommended = self._search_recommended()
+            output = self.config.get("output", {}) or {}
+            cap = int(output.get("max_results_per_platform", 50) or 0)
+            if cap and len(recommended) < cap:
+                needed = cap - len(recommended)
+                self.logger.info(
+                    "[naukri] %d recommended job(s) (< cap %d); "
+                    "supplementing with generic search for %d more.",
+                    len(recommended), cap, needed,
+                )
+                extra = self._supplement_with_generic_search(recommended, needed)
+                recommended = recommended + extra
+            self.jobs = recommended
+            return recommended
         return super().search_all()
 
     def _mode(self) -> str:
@@ -171,6 +180,7 @@ class NaukriScraper(BaseScraper):
                         experience=exp,
                         posted_date=posted,
                         skills=skills,
+                        source="search",
                     )
                 )
 
@@ -390,11 +400,123 @@ class NaukriScraper(BaseScraper):
                     experience=exp,
                     posted_date=posted,
                     skills=skills,
+                    source="recommended",
                 )
             )
 
         self.logger.info(
             "[naukri] recommended-mode results: %d kept, %d blocked, %d stale, %d no_url.",
             len(collected), blocked, stale_drops, no_url,
+        )
+        return collected
+
+    # ------------------------------------------------------------------ supplement
+
+    def _supplement_with_generic_search(
+        self, existing: list[Job], needed: int
+    ) -> list[Job]:
+        """Run title×city searches until `needed` additional jobs are found."""
+        if needed <= 0 or self._should_stop():
+            return []
+
+        search = self.config.get("search", {}) or {}
+        loc = self.config.get("location", {}) or {}
+        titles: list[str] = [t for t in (search.get("job_titles") or []) if t]
+        cities: list[str] = [c for c in (loc.get("preferred_cities") or []) if c]
+        if not titles:
+            self.logger.warning("[naukri] No job_titles configured; cannot supplement.")
+            return []
+        if not cities:
+            cities = [""]
+
+        excluded = [k for k in (search.get("excluded_keywords") or []) if k]
+        per_company_cap_raw = (self.config.get("output", {}) or {}).get(
+            "max_results_per_company", 5
+        )
+        if per_company_cap_raw is None:
+            per_company_cap = 5
+        else:
+            try:
+                per_company_cap = max(0, int(per_company_cap_raw))
+            except (TypeError, ValueError):
+                per_company_cap = 5
+
+        company_intel = self.config.get("company_intel", {}) or {}
+        bl_terms = [s.lower().strip() for s in (company_intel.get("blacklist") or []) if s]
+        wl_terms = [s.lower().strip() for s in (company_intel.get("whitelist") or []) if s]
+        runtime = self.config.get("_runtime") or {}
+        skip_urls: set[str] = set(runtime.get("skip_urls") or set())
+
+        seen_urls: set[str] = {j.url for j in existing if j.url}
+        company_counts: dict[str, int] = {}
+        for job in existing:
+            company_key = (job.company or "").strip().lower()
+            if company_key:
+                company_counts[company_key] = company_counts.get(company_key, 0) + 1
+
+        collected: list[Job] = []
+        total_combos = len(titles) * max(len(cities), 1)
+        done_combos = 0
+
+        self.logger.info(
+            "[naukri] Generic supplement: %d title(s) x %d city(ies), need %d more.",
+            len(titles), len(cities), needed,
+        )
+
+        for title in titles:
+            if self._should_stop() or len(collected) >= needed:
+                break
+            for city in cities:
+                if self._should_stop() or len(collected) >= needed:
+                    break
+                done_combos += 1
+                self.logger.info(
+                    "[naukri] supplement (%d/%d) searching %r / %r ...",
+                    done_combos, total_combos, title, city or "any",
+                )
+                try:
+                    results = self.search_one(title, city) or []
+                except Exception as e:
+                    if is_dead_driver_error(e):
+                        self._driver_dead = True
+                        self.logger.warning(
+                            "[naukri] Driver died during supplement %r / %r.",
+                            title, city,
+                        )
+                        return collected
+                    self.logger.exception(
+                        "[naukri] supplement search_one(%r, %r) raised: %s",
+                        title, city, e,
+                    )
+                    continue
+
+                for job in results:
+                    if not job.url or job.url in seen_urls:
+                        continue
+                    if self._excluded(job, excluded):
+                        continue
+                    if skip_urls and job.url in skip_urls:
+                        continue
+                    company_key = (job.company or "").strip().lower()
+                    if bl_terms and company_key and any(t in company_key for t in bl_terms):
+                        continue
+                    if wl_terms and not (
+                        company_key and any(t in company_key for t in wl_terms)
+                    ):
+                        continue
+                    if per_company_cap > 0:
+                        if company_key and company_counts.get(company_key, 0) >= per_company_cap:
+                            continue
+                        if company_key:
+                            company_counts[company_key] = company_counts.get(company_key, 0) + 1
+                    seen_urls.add(job.url)
+                    collected.append(job)
+                    if len(collected) >= needed:
+                        break
+
+                self._polite_delay(0.5, 1.5)
+
+        self.logger.info(
+            "[naukri] Generic supplement collected %d job(s).", len(collected)
         )
         return collected

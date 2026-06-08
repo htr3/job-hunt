@@ -44,8 +44,8 @@ platforms:
     enabled: true
     email: ${NAUKRI_EMAIL}
     password: ${NAUKRI_PASSWORD}
-    # mode: "search" (anonymous keyword search) or
-    #       "recommended" (logs in, scrapes /mnjuser/recommendedjobs).
+    # mode: "search" (keyword/city only) or "recommended" (recommended feed
+    # first; falls back to keyword search if fewer than 50 jobs found).
     mode: recommended
   indeed:
     enabled: true
@@ -71,6 +71,7 @@ company_intel:
 auto_apply:
   enabled: false
   daily_limit: 5
+  update_resume: true
   headless: false
   chrome_profile_dir: ''
   platforms:

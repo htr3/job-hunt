@@ -1,16 +1,19 @@
-"""Shared Naukri login helper.
+"""Shared Naukri login + profile helpers.
 
 Used by:
-  - `auto_apply.py` — to log in before clicking Apply buttons.
+  - `auto_apply.py` — login before applying; optional resume upload.
   - `scrapers/naukri_scraper.py` — when `mode: recommended` needs the
     `/mnjuser/recommendedjobs` page (login-gated).
 
-Both call `naukri_login(driver, email, password)`. Returns True on success,
-False if the form couldn't be filled or login didn't take.
+`naukri_login(driver, email, password)` returns True on success.
+`naukri_update_resume(driver, resume_path)` uploads a PDF to the profile.
 """
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 try:
@@ -38,6 +41,7 @@ except ImportError:  # pragma: no cover
 
 
 NAUKRI_LOGIN_URL = "https://www.naukri.com/nlogin/login"
+NAUKRI_PROFILE_URL = "https://www.naukri.com/mnjuser/profile"
 _HOME_HINT = "naukri.com"
 
 
@@ -127,3 +131,111 @@ def naukri_login(
     except WebDriverException as e:
         log.warning("naukri_auth: webdriver error during login: %s", e)
         return False
+
+
+def _click_if_present(driver: Any, by: Any, selector: str, log: logging.Logger) -> bool:
+    try:
+        el = driver.find_element(by, selector)
+        if el.is_displayed():
+            el.click()
+            return True
+    except (NoSuchElementException, WebDriverException):
+        pass
+    return False
+
+
+def naukri_update_resume(
+    driver: Any,
+    resume_path: str | Path,
+    logger: logging.Logger | None = None,
+    timeout: int = 30,
+) -> bool:
+    """Upload `resume_path` to Naukri profile. Returns True if upload looks OK."""
+    log = logger or logging.getLogger("naukri_auth")
+    path = Path(resume_path).expanduser().resolve()
+    if not path.is_file():
+        log.warning("naukri_auth: resume not found at %s", path)
+        return False
+
+    try:
+        driver.get(NAUKRI_PROFILE_URL)
+    except WebDriverException as e:
+        log.warning("naukri_auth: could not open profile page: %s", e)
+        return False
+
+    time.sleep(2)
+    for close_sel in (
+        "//*[contains(@class, 'crossIcon')]",
+        "//*[contains(@class, 'cross-icon')]",
+        "//*[@alt='cross-icon']",
+    ):
+        _click_if_present(driver, By.XPATH, close_sel, log)
+        time.sleep(0.5)
+
+    wait = WebDriverWait(driver, timeout)
+    uploaded = False
+    abs_path = str(path)
+
+    file_input_selectors = [
+        (By.ID, "attachCV"),
+        (By.ID, "lazyAttachCV"),
+        (By.XPATH, "//*[contains(@class, 'upload')]//input[@type='file']"),
+        (By.XPATH, "//input[@type='file' and contains(@id, 'attach')]"),
+        (By.CSS_SELECTOR, "input[type='file']"),
+    ]
+    for by, sel in file_input_selectors:
+        try:
+            el = wait.until(EC.presence_of_element_located((by, sel)))
+            if el:
+                try:
+                    driver.execute_script(
+                        "arguments[0].style.display='block';"
+                        "arguments[0].style.visibility='visible';",
+                        el,
+                    )
+                except WebDriverException:
+                    pass
+                el.send_keys(abs_path)
+                uploaded = True
+                log.info("naukri_auth: sent resume file via %s", sel)
+                break
+        except TimeoutException:
+            continue
+        except WebDriverException as e:
+            log.debug("naukri_auth: file input %s failed: %s", sel, e)
+            continue
+
+    if not uploaded:
+        log.warning("naukri_auth: could not find resume upload input on profile page.")
+        return False
+
+    for save_sel in (
+        "//button[@type='button' and contains(translate(., 'SAVE', 'save'), 'save')]",
+        "//button[contains(translate(., 'UPDATE', 'update'), 'update')]",
+    ):
+        if _click_if_present(driver, By.XPATH, save_sel, log):
+            break
+
+    try:
+        checkpoint = wait.until(
+            EC.presence_of_element_located((By.XPATH, "//*[contains(@class, 'updateOn')]"))
+        )
+        updated_text = (checkpoint.text or "").strip()
+        today = datetime.today()
+        today_variants = {
+            today.strftime("%b %d, %Y"),
+            f"{today.strftime('%b')} {today.day}, {today.strftime('%Y')}",
+        }
+        if any(d in updated_text for d in today_variants):
+            log.info("naukri_auth: resume updated (last updated: %s).", updated_text)
+            return True
+        log.info(
+            "naukri_auth: resume upload sent; profile shows: %s", updated_text or "(no date)"
+        )
+        return True
+    except TimeoutException:
+        log.warning("naukri_auth: resume upload sent but could not verify update date.")
+        return uploaded
+    except WebDriverException as e:
+        log.warning("naukri_auth: resume verify failed: %s", e)
+        return uploaded

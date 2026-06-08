@@ -88,6 +88,9 @@ class Job:
     posted_date: str = ""
     skills: list[str] = field(default_factory=list)
     match_score: float = 0.0
+    # "recommended" (Naukri feed) or "search" (keyword/city). Used to apply
+    # recommended jobs before generic search results.
+    source: str = ""
 
 
 # --- BaseScraper -------------------------------------------------------------
