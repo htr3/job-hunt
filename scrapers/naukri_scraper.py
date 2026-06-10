@@ -68,17 +68,24 @@ class NaukriScraper(BaseScraper):
         mode = self._mode()
         if mode == "recommended":
             recommended = self._search_recommended()
-            output = self.config.get("output", {}) or {}
-            cap = int(output.get("max_results_per_platform", 50) or 0)
-            if cap and len(recommended) < cap:
-                needed = cap - len(recommended)
+            if not self._recommended_only():
+                output = self.config.get("output", {}) or {}
+                cap = int(output.get("max_results_per_platform", 50) or 0)
+                if cap and len(recommended) < cap:
+                    needed = cap - len(recommended)
+                    self.logger.info(
+                        "[naukri] %d recommended job(s) (< cap %d); "
+                        "supplementing with generic search for %d more.",
+                        len(recommended), cap, needed,
+                    )
+                    extra = self._supplement_with_generic_search(recommended, needed)
+                    recommended = recommended + extra
+            else:
                 self.logger.info(
-                    "[naukri] %d recommended job(s) (< cap %d); "
-                    "supplementing with generic search for %d more.",
-                    len(recommended), cap, needed,
+                    "[naukri] recommended_only enabled — skipping generic search "
+                    "supplement (%d recommended job(s)).",
+                    len(recommended),
                 )
-                extra = self._supplement_with_generic_search(recommended, needed)
-                recommended = recommended + extra
             self.jobs = recommended
             return recommended
         return super().search_all()
@@ -87,6 +94,15 @@ class NaukriScraper(BaseScraper):
         platforms = self.config.get("platforms", {}) or {}
         naukri = platforms.get("naukri", {}) or {}
         return str(naukri.get("mode", "search")).strip().lower() or "search"
+
+    def _recommended_only(self) -> bool:
+        """True when auto-apply should target only Naukri's recommended feed."""
+        aa = self.config.get("auto_apply", {}) or {}
+        if bool(aa.get("recommended_only")):
+            return True
+        platforms = self.config.get("platforms", {}) or {}
+        naukri = platforms.get("naukri", {}) or {}
+        return bool(naukri.get("recommended_only"))
 
     # ------------------------------------------------------------------ mode: search
 
