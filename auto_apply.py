@@ -99,14 +99,27 @@ def _year_chip_matches(chip_text: str, target_year: str) -> bool:
       "3 yrs"      -> exact
       "1-3"        -> 1 <= 3 <= 3
       "3-5 years"  -> 3 <= 3 <= 5
+      "<5 years"   -> target < 5
+      ">9 years"   -> target > 9
       "5+"         -> 3 >= 5  (False)
       "0-1"        -> False
+      "No experience" -> False when target > 0
     """
     try:
         target = int(str(target_year).strip())
     except (TypeError, ValueError):
         return False
     text = chip_text.lower()
+    if "no experience" in text or text in ("0", "0 yrs", "0 years", "fresher"):
+        return target <= 0
+    # "<5" or "< 5 years"
+    m_lt = re.search(r"<\s*(\d+)", text)
+    if m_lt:
+        return target < int(m_lt.group(1))
+    # ">9" or "> 9 years"
+    m_gt = re.search(r">\s*(\d+)", text)
+    if m_gt:
+        return target > int(m_gt.group(1))
     # "5+" or "5 +"
     m_plus = re.search(r"(\d+)\s*\+", text)
     if m_plus:
@@ -121,6 +134,19 @@ def _year_chip_matches(chip_text: str, target_year: str) -> bool:
     if m_one:
         return int(m_one.group(1)) == target
     return False
+
+
+_CITY_ALIASES: dict[str, tuple[str, ...]] = {
+    "bangalore": ("bangalore", "bengaluru", "bangalore, karnataka", "bengaluru, karnataka"),
+    "gurugram": ("gurugram", "gurgaon", "gurugram, haryana", "gurgaon, haryana"),
+    "mumbai": ("mumbai", "bombay", "mumbai, maharashtra"),
+    "pune": ("pune", "pune, maharashtra"),
+    "hyderabad": ("hyderabad", "hyderabad, telangana"),
+    "chennai": ("chennai", "madras", "chennai, tamil nadu"),
+    "noida": ("noida", "noida, uttar pradesh"),
+    "delhi": ("delhi", "new delhi", "delhi ncr"),
+    "remote": ("remote", "work from home", "wfh"),
+}
 
 
 class _ApplyDriver(BaseScraper):
@@ -142,6 +168,7 @@ class AutoApplier:
         self.rate_limits: dict[str, int] = aa.get("rate_limit") or {"naukri": 60, "default": 60}
         self.screening: dict[str, Any] = aa.get("screening_answers") or {}
         self.update_resume: bool = bool(aa.get("update_resume", False))
+        self.recommended_only: bool = bool(aa.get("recommended_only", False))
 
         output = self.config.get("output", {}) or {}
         self._db = JobDatabase(db_path=resolve_db_path(output.get("results_dir", "results")))
@@ -174,7 +201,18 @@ class AutoApplier:
             if (getattr(j, "platform", "") or "").lower() in self.platforms
             and (getattr(j, "url", "") or "")
         ]
-        # Recommended Naukri feed jobs first, then generic keyword search.
+        if self.recommended_only:
+            before = len(eligible)
+            eligible = [
+                j for j in eligible
+                if (getattr(j, "source", "") or "").lower() == "recommended"
+            ]
+            logger.info(
+                "auto_apply: recommended_only=true — %d of %d job(s) are from "
+                "Naukri recommended feed.",
+                len(eligible), before,
+            )
+        # Recommended feed first when mixed; then highest match score.
         eligible.sort(
             key=lambda j: (
                 0 if (getattr(j, "source", "") or "").lower() == "recommended" else 1,
@@ -184,7 +222,9 @@ class AutoApplier:
         )
         if not eligible:
             logger.info(
-                "auto_apply: no eligible jobs (enabled platforms: %s)", self.platforms
+                "auto_apply: no eligible jobs (enabled platforms: %s%s)",
+                self.platforms,
+                ", recommended_only" if self.recommended_only else "",
             )
             return summary
 
@@ -662,21 +702,31 @@ class AutoApplier:
 
             # 0. Dedicated handler for the 3-input DOB widget (DD/MM/YYYY).
             dob_filled = self._fill_dob_inputs(driver, panel)
-            # 1. Click any chip/option that matches our answers (Yes/No,
+            # 1. City multiselect checkboxes (e.g. "select the city you are residing...").
+            city_clicked = False if dob_filled else self._click_city_multiselect(driver, panel)
+            # 2. Consent / agreement checkboxes.
+            consent_clicked = False if (dob_filled or city_clicked) else self._click_consent(driver, panel)
+            # 3. Click any chip/option that matches our answers (Yes/No,
             #    skill multi-select, year-range buttons).
-            chip_clicked = False if dob_filled else self._click_matching_chips(driver, panel)
-            # 2. If no chip matched, try the chat-bubble + "Type message here"
+            chip_clicked = (
+                False
+                if (dob_filled or city_clicked or consent_clicked)
+                else self._click_matching_chips(driver, panel)
+            )
+            # 4. If no chip matched, try the chat-bubble + "Type message here"
             #    pattern (e.g. "How many years of experience in Java?").
             text_answered = False
-            if not (dob_filled or chip_clicked):
+            if not (dob_filled or city_clicked or consent_clicked or chip_clicked):
                 text_answered = self._answer_chat_text_question(driver, panel)
-            # 3. Old-style label-and-input forms (rare in chatbot, common in
+            # 5. Old-style label-and-input forms (rare in chatbot, common in
             #    legacy Naukri screening drawers).
-            if not (dob_filled or chip_clicked or text_answered):
+            if not (dob_filled or city_clicked or consent_clicked or chip_clicked or text_answered):
                 self._answer_screening(driver, root=panel)
-            # 4. Advance.
+            # 6. Advance.
             advanced = self._click_save_and_continue(driver, root=panel)
-            round_did_progress = bool(dob_filled or chip_clicked or text_answered or advanced)
+            round_did_progress = bool(
+                dob_filled or city_clicked or consent_clicked or chip_clicked or text_answered or advanced
+            )
             if round_did_progress:
                 progress_rounds += 1
             if not round_did_progress:
@@ -745,7 +795,8 @@ class AutoApplier:
                 " | .//div[contains(@class,'chip')] | .//span[contains(@class,'chip')]"
                 " | .//div[contains(@class,'option')] | .//div[contains(@class,'radio')]"
                 " | .//label[contains(@class,'option')] | .//label[contains(@class,'radio')]"
-                " | .//label[contains(@class,'mcc__label')] | .//label[@for]",
+                " | .//label[contains(@class,'mcc__label')] | .//label[contains(@class,'ssrc__label')]"
+                " | .//label[@for] | .//div[contains(@class,'ssrc__radio-btn-container')]",
             )
         except WebDriverException:
             return False
@@ -929,6 +980,191 @@ class AutoApplier:
             if default_skill and text == default_skill:
                 if _click(chip):
                     return True
+
+        # PASS 3: organization type, qualification, designation — partial label match.
+        if target_val and isinstance(target_val, str):
+            target_lower = target_val.strip().lower()
+            if len(target_lower) >= 3:
+                for chip in chips:
+                    try:
+                        if not chip.is_displayed() or not chip.is_enabled():
+                            continue
+                    except Exception:
+                        continue
+                    text = _leaf_text(chip).lower()
+                    if not text:
+                        continue
+                    if target_lower in text or text in target_lower:
+                        if _click(chip):
+                            logger.info(
+                                "auto_apply: chatbot picked %r for Q=%r",
+                                text[:60], (question or "")[:80],
+                            )
+                            return True
+        return False
+
+    # ------------------------------------------------------------------ city / consent helpers
+    def _normalize_city(self, name: str) -> str:
+        text = (name or "").strip().lower()
+        for canonical, aliases in _CITY_ALIASES.items():
+            if text in aliases or canonical in text:
+                return canonical
+        return text.split(",")[0].strip()
+
+    def _preferred_cities(self) -> list[str]:
+        loc = self.config.get("location", {}) or {}
+        cities = [str(c).strip() for c in (loc.get("preferred_cities") or []) if c]
+        current = str((self.screening or {}).get("current_location") or "").strip()
+        if current:
+            cities.append(current)
+        normalized = []
+        seen: set[str] = set()
+        for city in cities:
+            key = self._normalize_city(city)
+            if key and key not in seen:
+                seen.add(key)
+                normalized.append(key)
+        return normalized
+
+    def _city_label_matches(self, label: str, targets: set[str]) -> bool:
+        label_norm = self._normalize_city(label)
+        label_lower = (label or "").strip().lower()
+        for target in targets:
+            if label_norm == target:
+                return True
+            aliases = _CITY_ALIASES.get(target, (target,))
+            if any(alias in label_lower for alias in aliases):
+                return True
+        return False
+
+    def _willingness_for_location_question(self, text: str) -> str:
+        """Yes/No for office/relocation questions, including city-specific ones."""
+        answers = self.screening or {}
+        willing = str(answers.get("willing_to_relocate") or "Yes").strip().lower()
+        if willing not in ("yes", "no"):
+            willing = "yes"
+
+        mentioned: set[str] = set()
+        lower = (text or "").lower()
+        for canonical, aliases in _CITY_ALIASES.items():
+            if any(alias in lower for alias in aliases):
+                mentioned.add(canonical)
+
+        if mentioned:
+            preferred = set(self._preferred_cities())
+            if mentioned & preferred:
+                return "Yes"
+            if willing == "yes":
+                return "Yes"
+            return "No"
+
+        if willing == "yes":
+            return "Yes"
+        return "No"
+
+    def _click_city_multiselect(self, driver: Any, root: Any) -> bool:
+        """Select city checkboxes for 'residing or willing to relocate' questions."""
+        question = (self._latest_bot_question(root) or "").lower()
+        if not (
+            "city" in question
+            and any(k in question for k in ("residing", "relocate", "select", "location"))
+        ):
+            return False
+
+        try:
+            labels = root.find_elements(By.CSS_SELECTOR, "label.mcc__label")
+        except WebDriverException:
+            labels = []
+        if not labels:
+            return False
+
+        targets = set(self._preferred_cities())
+        clicked_any = False
+        for label in labels:
+            try:
+                if not label.is_displayed():
+                    continue
+                text = (label.text or "").strip()
+            except Exception:
+                continue
+            if not text or not self._city_label_matches(text, targets):
+                continue
+            try:
+                label.click()
+            except WebDriverException:
+                try:
+                    driver.execute_script("arguments[0].click();", label)
+                except WebDriverException:
+                    continue
+            try:
+                driver.execute_script(
+                    "var el=arguments[0];"
+                    "var inp=el.htmlFor ? document.getElementById(el.htmlFor) : null;"
+                    "if(inp){inp.checked=true;"
+                    "inp.dispatchEvent(new Event('change',{bubbles:true}));}",
+                    label,
+                )
+            except WebDriverException:
+                pass
+            clicked_any = True
+            logger.info(
+                "auto_apply: chatbot selected city %r for Q=%r",
+                text[:60], question[:80],
+            )
+        return clicked_any
+
+    def _click_consent(self, driver: Any, root: Any) -> bool:
+        """Tick consent / agreement checkboxes when recruiters ask for it."""
+        question = (self._latest_bot_question(root) or "").lower()
+        if not any(k in question for k in ("consent", "agree", "accept", "terms")):
+            return False
+
+        consent_answer = str((self.screening or {}).get("consent") or "Yes").strip().lower()
+        if consent_answer in ("no", "false"):
+            return False
+
+        selectors = (
+            "input[type='checkbox']",
+            "input.mcc__checkbox",
+            "label.mcc__label",
+        )
+        for sel in selectors:
+            try:
+                els = root.find_elements(By.CSS_SELECTOR, sel)
+            except WebDriverException:
+                els = []
+            for el in els:
+                try:
+                    if not el.is_displayed():
+                        continue
+                    tag = (el.tag_name or "").lower()
+                    if tag == "input":
+                        if el.is_selected():
+                            return True
+                        el.click()
+                        return True
+                    text = (el.text or "").strip().lower()
+                    if text and any(
+                        k in text for k in ("agree", "consent", "accept", "read")
+                    ):
+                        el.click()
+                        return True
+                except WebDriverException:
+                    continue
+
+        # Fallback: click the first visible checkbox in the panel.
+        try:
+            boxes = root.find_elements(By.CSS_SELECTOR, "input[type='checkbox']")
+        except WebDriverException:
+            boxes = []
+        for box in boxes:
+            try:
+                if box.is_displayed() and not box.is_selected():
+                    box.click()
+                    logger.info("auto_apply: chatbot consent checkbox ticked for Q=%r", question[:80])
+                    return True
+            except WebDriverException:
+                continue
         return False
 
     # ------------------------------------------------------------------ shared helpers
@@ -1154,6 +1390,36 @@ class AutoApplier:
             if v:
                 return str(v)
 
+        # Office / relocation willingness (e.g. "Work from Office in Gurugram").
+        if any(
+            k in text
+            for k in (
+                "work from office",
+                "wfo",
+                "residing in",
+                "relocate to",
+                "relocate",
+                "willing to relocate",
+            )
+        ):
+            return self._willingness_for_location_question(text)
+
+        # Organization type (product vs service).
+        if "product" in text and "service" in text:
+            v = answers.get("organization_type")
+            if v:
+                return str(v)
+
+        # Salutation / consent text answers.
+        if "salutation" in text:
+            v = answers.get("salutation")
+            if v:
+                return str(v)
+        if any(k in text for k in ("consent", "agree", "accept")):
+            v = answers.get("consent")
+            if v:
+                return str(v)
+
         # Generic Yes/No questions ("Do you have ...", "Are you ...", "Have you
         # worked with ...", "Can you ..."). Resolve to default_skill_answer so
         # skill / hands-on experience questions get the configured answer
@@ -1238,6 +1504,7 @@ class AutoApplier:
                         el.click()
                     except WebDriverException:
                         driver.execute_script("arguments[0].click();", el)
+                    time.sleep(0.4)
                     return True
                 except WebDriverException:
                     continue

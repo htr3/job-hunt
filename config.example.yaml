@@ -70,6 +70,9 @@ company_intel:
   whitelist: []
 auto_apply:
   enabled: false
+  # When true, only auto-apply to Naukri recommended feed jobs (requires
+  # platforms.naukri.mode: recommended). Skips generic keyword-search supplement.
+  recommended_only: true
   daily_limit: 5
   update_resume: true
   headless: false
@@ -102,6 +105,9 @@ auto_apply:
       - Docker
       - AWS
     default_skill_answer: 'Yes'
+    organization_type: Service Based Organization
+    salutation: Mr.
+    consent: 'Yes'
     custom_answers: {}
 resume_tailoring:
   enabled: false
